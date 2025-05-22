@@ -1,0 +1,13 @@
+carlider_website:
+  mazda:
+    url: https://www.carlider.co/listado/accesorios-vehiculos/repuestos-carros-camionetas/_BRAND_66811#origin=brand_carousel&position=0&id=66811&applied_filter_id%3DBRAND%26applied_filter_name%3DMarca%26applied_filter_order%3D1%26applied_value_id%3D66811%26applied_value_name%3DMazda%26applied_value_order%3D1%26applied_value_results%3D573%26is_custom%3Dfalse
+  nissan:
+    url: https://www.carlider.co/listado/accesorios-vehiculos/repuestos-carros-camionetas/_BRAND_66812#origin=brand_carousel&position=0&id=66812&applied_filter_id%3DBRAND%26applied_filter_name%3DMarca%26applied_filter_order%3D1%26applied_value_id%3D66812%26applied_value_name%3DNissan%26applied_value_order%3D1%26applied_value_results%3D1000%26is_custom%3Dfalse
+
+base_url: "https://www.carlider.co/listado/accesorios-vehiculos/repuestos-carros-camionetas/_BRAND_66811#origin=brand_carousel&position=0&id=66811&applied_filter_id%3DBRAND%26applied_filter_name%3DMarca%26applied_filter_order%3D1%26applied_value_id%3D66811%26applied_value_name%3DMazda%26applied_value_order%3D1%26applied_value_results%3D573%26is_custom%3Dfalse"
+selectors:
+  title: ".poly-component__title"
+  price: ".andes-money-amount.andes-money-amount--cents-superscript .andes-money-amount__fraction"
+  link: ".poly-card__content a"
+  next_page: ".andes-pagination__button.andes-pagination__button--current"
+  car_link: ".ui-search-filter-name.shops-custom-secondary-font"

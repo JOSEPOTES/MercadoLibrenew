@@ -6,6 +6,14 @@ from openpyxl import Workbook
 import time
 import re
 import os
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.common.exceptions import NoSuchElementException, TimeoutException
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+import unicodedata
 
 # Configuración editable
 CONFIG = {
@@ -20,7 +28,7 @@ CONFIG = {
     'sidebar_brand_name_selector': 'span.ui-search-filter-name.shops-custom-secondary-font',
     'product_title_selector': '.poly-component__title',
     'product_price_selector': '.andes-money-amount.andes-money-amount--cents-superscript .andes-money-amount__fraction',
-    'product_link_selector': '.poly-card__content a',
+    'product_link_selector': '.poly-card__content a.poly-component__title',
     'next_page_selector': 'li.andes-pagination__button--next a',
     'base_url': 'https://www.carlider.co',
 }
@@ -78,24 +86,39 @@ class CarliderScraper:
     def extract_products(self, brand_url, progress_callback=None):
         productos = []
         url = brand_url
+        # Obtener el nombre de la marca desde la URL (última parte)
+        brand_name = brand_url.split('/')[-1].replace('-', ' ').upper()
         while url:
             soup = self.get_soup(url)
             titles = [t.get_text(strip=True) for t in soup.select(self.config['product_title_selector'])]
             prices = [p.get_text(strip=True) for p in soup.select(self.config['product_price_selector'])]
-            links = [l['href'] for l in soup.select(self.config['product_link_selector']) if l.has_attr('href')]
+            links = [l['href'] for l in soup.select(self.config['product_link_selector']) if l.has_attr('href') and '/MCO' in l['href']]
             for title, price, link in zip(titles, prices, links):
                 image_url = self.extract_main_image(link)
-                extra = self.note_detector(link)
-                productos.append({
+                extra = self.note_detector(link, brand_name)
+                producto = {
                     'nombre': title,
                     'valor': price,
-                    'link': link,
-                    'imagen': image_url,
+                    'unidades': extra['unidades'],
                     'nota': extra['nota'],
-                    'numero_pieza': extra['numero_pieza'],
+                    'proviene': extra['proviene'],
                     'condicion': extra['condicion'],
-                    'unidades': extra['unidades']
-                })
+                    'descripcion_general': extra['descripcion_general'],
+                    'categoria_repuesto': extra['categoria_repuesto'],
+                    'link': link,
+                    'imagen': image_url
+                }
+                # Validar si el producto está incompleto
+                if not producto['valor'] or not producto['link'] or not producto['imagen']:
+                    selenium_result = self.buscar_producto_selenium(title)
+                    if selenium_result:
+                        producto.update(selenium_result)
+                        producto['PRODUCTO NO ENCONTRADO'] = ''
+                    else:
+                        producto['PRODUCTO NO ENCONTRADO'] = 'SI'
+                else:
+                    producto['PRODUCTO NO ENCONTRADO'] = ''
+                productos.append(producto)
                 if progress_callback:
                     progress_callback(f"Producto extraído: {title}")
             next_btn = soup.select_one(self.config['next_page_selector'])
@@ -120,7 +143,29 @@ class CarliderScraper:
             return available_tag.get_text(strip=True)
         return 'No especificado'
 
-    def note_detector(self, product_url):
+    def extract_breadcrumb(self, soup):
+        breadcrumb_items = soup.select('li.andes-breadcrumb__item a.andes-breadcrumb__link')
+        if breadcrumb_items:
+            textos = [a.get_text(strip=True) for a in breadcrumb_items]
+            return ' > '.join(textos)
+        return ''
+
+    def extract_full_description(self, soup):
+        desc_tag = soup.select_one('.ui-pdp-description__content')
+        if desc_tag:
+            return desc_tag.get_text(separator="\n", strip=True)
+        return "Este producto no tiene descripcion."
+
+    def extract_proviene(self, soup, brand_name):
+        desc_tag = soup.select_one('.ui-pdp-description__content')
+        if desc_tag:
+            desc_text = desc_tag.get_text(separator="\n", strip=True)
+            match = re.search(r'Viene de\s*([^\n\r]+)', desc_text, re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+        return brand_name
+
+    def note_detector(self, product_url, brand_name=None):
         soup = self.get_soup(product_url)
         resultado = {}
 
@@ -129,16 +174,12 @@ class CarliderScraper:
         desc_tag = soup.select_one('.ui-pdp-description__content')
         if desc_tag:
             desc_text = desc_tag.get_text(separator="\n", strip=True)
-            # Buscar variantes de "Nota"
-            import re
             match = re.search(r'(Nota[s]? del producto|Nota[s]?):\s*(.*)', desc_text, re.IGNORECASE)
             if match:
                 texto_nota = match.group(2).strip()
-                # Si la nota es "No aplica" o vacía
                 if texto_nota.lower() == "no aplica" or texto_nota == "":
                     nota = "Producto Usado sin especificaciones"
                 else:
-                    # Solo tomar la primera línea de la nota (hasta salto de línea)
                     nota = texto_nota.split('\n')[0].strip()
         resultado['nota'] = nota
 
@@ -158,14 +199,19 @@ class CarliderScraper:
         unidades_tag = soup.select_one('.ui-pdp-buybox__quantity__available')
         if unidades_tag:
             unidades = unidades_tag.get_text(strip=True)
-            # Extraer solo el número si viene como "(3 disponibles)"
-            import re
             match = re.search(r'(\d+)', unidades)
             if match:
                 unidades = match.group(1)
             else:
                 unidades = "1"
         resultado['unidades'] = unidades
+
+        # 5. Proviene
+        resultado['proviene'] = self.extract_proviene(soup, brand_name or "")
+        # 6. Descripcion general
+        resultado['descripcion_general'] = self.extract_full_description(soup)
+        # 7. Categoria del repuesto
+        resultado['categoria_repuesto'] = self.extract_breadcrumb(soup)
 
         return resultado
 
@@ -179,6 +225,125 @@ class CarliderScraper:
                     return value_span.get_text(strip=True)
         # Si no encuentra nada, retorna vacío
         return ""
+
+    # --- Lógica Selenium ---
+    def buscar_producto_selenium(self, nombre_producto):
+        """
+        Busca el producto usando Selenium en modo headless y retorna un diccionario
+        con los campos completos si lo encuentra, o None si no lo encuentra.
+        """
+        def normalizar(texto):
+            if not texto:
+                return ''
+            texto = texto.lower().strip()
+            texto = ''.join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn')
+            texto = ''.join(e for e in texto if e.isalnum() or e.isspace())
+            return texto
+
+        intentos = 0
+        while intentos < 2:
+            intentos += 1
+            try:
+                chrome_options = Options()
+                chrome_options.add_argument('--headless')
+                chrome_options.add_argument('--disable-gpu')
+                chrome_options.add_argument('--window-size=1920,1080')
+                chrome_options.add_argument('--no-sandbox')
+                driver = webdriver.Chrome(options=chrome_options)
+                driver.get(self.config['main_url'])
+                wait = WebDriverWait(driver, 10)
+                # Esperar el formulario y el input
+                form = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'form#search-form.nav-search-form')))
+                input_box = form.find_element(By.CSS_SELECTOR, "input[type='text']")
+                input_box.clear()
+                input_box.send_keys(nombre_producto)
+                button = form.find_element(By.CSS_SELECTOR, "button[type='submit'].search-button")
+                button.click()
+                # Esperar los resultados
+                wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, '.poly-card__content a')))
+                productos = driver.find_elements(By.CSS_SELECTOR, '.poly-card__content a')
+                nombre_normalizado = normalizar(nombre_producto)
+                mejor_match = None
+                mejor_score = 0
+                for prod in productos:
+                    try:
+                        titulo = prod.text.strip()
+                        titulo_normalizado = normalizar(titulo)
+                        # Coincidencia exacta
+                        if titulo_normalizado == nombre_normalizado:
+                            mejor_match = prod
+                            mejor_score = 2
+                            break
+                        # Coincidencia parcial
+                        elif nombre_normalizado in titulo_normalizado or titulo_normalizado in nombre_normalizado:
+                            if mejor_score < 1:
+                                mejor_match = prod
+                                mejor_score = 1
+                    except Exception:
+                        continue
+                if mejor_match:
+                    link = mejor_match.get_attribute('href')
+                    # Entrar al producto
+                    driver.execute_script("window.open(arguments[0]);", link)
+                    driver.switch_to.window(driver.window_handles[-1])
+                    try:
+                        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, '.andes-money-amount__fraction')))
+                    except TimeoutException:
+                        print(f"[Selenium] Timeout esperando detalles para: {nombre_producto}")
+                    # Extraer datos igual que en el scraping normal
+                    try:
+                        precio = driver.find_element(By.CSS_SELECTOR, '.andes-money-amount.andes-money-amount--cents-superscript .andes-money-amount__fraction').text.strip()
+                    except NoSuchElementException:
+                        precio = ''
+                    try:
+                        imagen = driver.find_element(By.CSS_SELECTOR, 'figure.ui-pdp-gallery__figure img').get_attribute('src')
+                    except NoSuchElementException:
+                        imagen = ''
+                    try:
+                        nota = driver.find_element(By.CSS_SELECTOR, '.ui-pdp-description__content').text.strip()
+                    except NoSuchElementException:
+                        nota = ''
+                    try:
+                        condicion = driver.find_element(By.CSS_SELECTOR, '.ui-pdp-subtitle').text.strip()
+                    except NoSuchElementException:
+                        condicion = ''
+                    try:
+                        unidades = driver.find_element(By.CSS_SELECTOR, '.ui-pdp-buybox__quantity__available').text.strip()
+                    except NoSuchElementException:
+                        unidades = '1'
+                    # Número de pieza (opcional)
+                    numero_pieza = ''
+                    try:
+                        filas = driver.find_elements(By.CSS_SELECTOR, 'tr.andes-table__row')
+                        for row in filas:
+                            th = row.find_element(By.TAG_NAME, 'th').text.strip().lower()
+                            if 'número de pieza' in th:
+                                numero_pieza = row.find_element(By.CSS_SELECTOR, 'span.andes-table__column--value').text.strip()
+                                break
+                    except Exception:
+                        numero_pieza = ''
+                    driver.close()
+                    driver.switch_to.window(driver.window_handles[0])
+                    driver.quit()
+                    return {
+                        'valor': precio,
+                        'link': link,
+                        'imagen': imagen,
+                        'nota': nota,
+                        'numero_pieza': numero_pieza,
+                        'condicion': condicion,
+                        'unidades': unidades
+                    }
+                else:
+                    print(f"[Selenium] No se encontró coincidencia para: {nombre_producto}")
+                driver.quit()
+            except Exception as e:
+                print(f"[Selenium] Error buscando '{nombre_producto}': {e}")
+                try:
+                    driver.quit()
+                except:
+                    pass
+        return None
 
 class App(tk.Tk):
     def __init__(self, scraper):
@@ -268,9 +433,20 @@ class App(tk.Tk):
         wb = Workbook()
         ws = wb.active
         ws.title = brand_name
-        ws.append(['nombre', 'valor', 'link', 'imagen', 'nota', 'numero_pieza', 'condicion', 'unidades'])
+        ws.append(['Nombre', 'Valor', 'Unidades', 'Notas del producto', 'Proviene', 'Condicion', 'Descripcion general', 'Categoria del Repuesto', 'Link', 'Imagen'])
         for p in productos:
-            ws.append([p['nombre'], p['valor'], p['link'], p['imagen'], p['nota'], p['numero_pieza'], p['condicion'], p['unidades']])
+            ws.append([
+                p.get('nombre', ''),
+                p.get('valor', ''),
+                p.get('unidades', ''),
+                p.get('nota', ''),
+                p.get('proviene', ''),
+                p.get('condicion', ''),
+                p.get('descripcion_general', ''),
+                p.get('categoria_repuesto', ''),
+                p.get('link', ''),
+                p.get('imagen', '')
+            ])
         wb.save(filename)
         self.progress(f"Archivo guardado: {filename}")
 
@@ -288,9 +464,20 @@ class App(tk.Tk):
                 i += 1
             sheet_names.add(sheet_name)
             ws = wb.create_sheet(title=sheet_name)
-            ws.append(['nombre', 'valor', 'link', 'imagen', 'nota', 'numero_pieza', 'condicion', 'unidades'])
+            ws.append(['Nombre', 'Valor', 'Unidades', 'Notas del producto', 'Proviene', 'Condicion', 'Descripcion general', 'Categoria del Repuesto', 'Link', 'Imagen'])
             for p in productos:
-                ws.append([p['nombre'], p['valor'], p['link'], p['imagen'], p['nota'], p['numero_pieza'], p['condicion'], p['unidades']])
+                ws.append([
+                    p.get('nombre', ''),
+                    p.get('valor', ''),
+                    p.get('unidades', ''),
+                    p.get('nota', ''),
+                    p.get('proviene', ''),
+                    p.get('condicion', ''),
+                    p.get('descripcion_general', ''),
+                    p.get('categoria_repuesto', ''),
+                    p.get('link', ''),
+                    p.get('imagen', '')
+                ])
         output_dir = r'C:\Users\Joseg\Desktop\Carlider\ExtractorCarlider'
         os.makedirs(output_dir, exist_ok=True)
         filename = os.path.join(output_dir, 'todas_las_marcas.xlsx')

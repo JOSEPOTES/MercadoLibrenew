@@ -102,6 +102,7 @@ class CarliderScraper:
                     'unidades': extra['unidades'],
                     'nota': extra['nota'],
                     'proviene': extra['proviene'],
+                    'numero_pieza': extra['numero_pieza'],
                     'condicion': extra['condicion'],
                     'descripcion_general': extra['descripcion_general'],
                     'categoria_repuesto': extra['categoria_repuesto'],
@@ -433,7 +434,7 @@ class App(tk.Tk):
         wb = Workbook()
         ws = wb.active
         ws.title = brand_name
-        ws.append(['Nombre', 'Valor', 'Unidades', 'Notas del producto', 'Proviene', 'Condicion', 'Descripcion general', 'Categoria del Repuesto', 'Link', 'Imagen'])
+        ws.append(['Nombre', 'Valor', 'Unidades', 'Notas del producto', 'Proviene', 'Número de parte', 'Condicion', 'Descripcion general', 'Categoria del Repuesto', 'Link', 'Imagen'])
         for p in productos:
             ws.append([
                 p.get('nombre', ''),
@@ -441,6 +442,7 @@ class App(tk.Tk):
                 p.get('unidades', ''),
                 p.get('nota', ''),
                 p.get('proviene', ''),
+                p.get('numero_pieza', ''),
                 p.get('condicion', ''),
                 p.get('descripcion_general', ''),
                 p.get('categoria_repuesto', ''),
@@ -464,7 +466,7 @@ class App(tk.Tk):
                 i += 1
             sheet_names.add(sheet_name)
             ws = wb.create_sheet(title=sheet_name)
-            ws.append(['Nombre', 'Valor', 'Unidades', 'Notas del producto', 'Proviene', 'Condicion', 'Descripcion general', 'Categoria del Repuesto', 'Link', 'Imagen'])
+            ws.append(['Nombre', 'Valor', 'Unidades', 'Notas del producto', 'Proviene', 'Número de parte', 'Condicion', 'Descripcion general', 'Categoria del Repuesto', 'Link', 'Imagen'])
             for p in productos:
                 ws.append([
                     p.get('nombre', ''),
@@ -472,6 +474,7 @@ class App(tk.Tk):
                     p.get('unidades', ''),
                     p.get('nota', ''),
                     p.get('proviene', ''),
+                    p.get('numero_pieza', ''),
                     p.get('condicion', ''),
                     p.get('descripcion_general', ''),
                     p.get('categoria_repuesto', ''),
